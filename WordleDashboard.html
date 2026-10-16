@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wordle Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #e9e9e9; --card: #f4f4f4; --white: #fff; --ink: #222; --muted: #666;
+    --accent: #d63fae; --tile: #7bcd7b; --line: #d6d6d6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .grid { display: grid; gap: 12px; padding: 12px; max-width: 1800px; margin: 0 auto;
+          grid-template-columns: 300px 160px 1fr 1.6fr; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+  h2 { margin: 0 0 10px; font-weight: 400; font-size: 22px; text-align: center; }
+  h3 { margin: 0 0 8px; font-weight: 400; font-size: 18px; }
+
+  /* Header tiles */
+  .title { text-align: center; background: transparent; }
+  .title .big { font-size: 52px; font-weight: 600; }
+  .title .game { font-size: 32px; font-style: italic; font-weight: 600; margin-top: 8px; }
+  .title .date { font-size: 20px; }
+  .wotm { background: var(--white); font-size: 14px; color: var(--muted); }
+  .wotm .lbl { font-size: 18px; color: var(--ink); margin-bottom: 8px; }
+  .wotm .val { font-size: 20px; color: var(--accent); margin-top: 8px; }
+  .word { text-align: center; }
+  .word .w { font-size: 30px; font-weight: 700; font-style: italic; margin: 6px 0 24px; }
+  .word .def { font-size: 13px; font-style: italic; color: var(--muted); }
+  .tiles { display: flex; gap: 14px; justify-content: center; }
+  .tile { background: var(--tile); color: #fff; flex: 1; max-width: 140px; aspect-ratio: 1; display: flex;
+          flex-direction: column; align-items: center; justify-content: center; }
+  .tile b { font-size: 64px; line-height: 1; font-weight: 600; }
+  .tile span { font-size: 18px; margin-top: 6px; }
+
+  /* Bottom row */
+  .bottom { grid-column: 1 / -1; display: grid; gap: 12px;
+            grid-template-columns: 1.1fr 0.85fr 1.35fr; }
+  .stack { display: grid; gap: 12px; align-content: start; min-width: 0; }
+  .filters { display: flex; gap: 40px; margin-bottom: 14px; }
+  .filters label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; flex: 1; }
+  select { padding: 6px 8px; border: 1px solid var(--line); background: #fff; font: inherit; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th { font-weight: 400; text-align: left; padding: 4px 6px; border-bottom: 2px solid #7bcd7b; white-space: nowrap; }
+  th.num, td.num { text-align: right; }
+  td { padding: 5px 6px; }
+  tfoot td { font-weight: 700; border-top: 2px solid #7bcd7b; }
+  .chartbox { position: relative; height: 260px; }
+  .stack .card:last-child .chartbox { height: 320px; }
+  #bump svg { width: 100%; height: auto; display: block; }
+  #bump text { font-family: inherit; }
+
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr 1fr; }
+    .bottom { grid-template-columns: 1fr; }
+    .tile b { font-size: 34px; } .tile span { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="card title">
+    <div class="big">Wordle</div>
+    <div class="game" id="game"></div>
+    <div class="date" id="date"></div>
+  </div>
+  <div class="card wotm">
+    <div class="lbl">Wordler of the Month</div>
+    <div class="val" id="wotmMonth"></div>Month
+    <div class="val" id="wotmUser"></div>User
+    <div class="val" id="wotmAvg"></div>Average score
+  </div>
+  <div class="card word">
+    <h3>Yesterday's Word</h3>
+    <div class="w" id="word"></div>
+    <div class="def" id="def"></div>
+  </div>
+  <div class="card">
+    <h2>Most common letter in each position</h2>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <div class="bottom">
+    <div class="card">
+      <h2>Leaderboard</h2>
+      <div class="filters">
+        <label>Year <select id="year"></select></label>
+        <label>Month <select id="month"></select></label>
+      </div>
+      <table>
+        <thead><tr><th>User</th><th class="num">Average score</th><th class="num">Games Played</th>
+          <th class="num">W's</th><th class="num">L's</th><th class="num">W/L Ratio</th></tr></thead>
+        <tbody id="lbBody"></tbody>
+        <tfoot id="lbFoot"></tfoot>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Monthly Change in Leaderboard</h2>
+      <div id="bump"></div>
+    </div>
+    <div class="stack">
+      <div class="card"><h3>Avg Score (Inverted)</h3><div class="chartbox"><canvas id="trend"></canvas></div></div>
+      <div class="card"><h3>Score Distribution</h3><div class="chartbox"><canvas id="dist"></canvas></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Config ----------
+// Paste your Google Sheets "Publish to web" CSV link here. Leave empty to use data.csv next to this file.
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRKn2KqwLPzFRPOOcqhe58mQnkVKKMzFxNq83Jrd34UxUG_4az61dM_d-6X81FPoSz_3pKet9qHmfDC/pub?gid=2052891941&single=true&output=csv";
+const DATE_ORDER = "DMY";            // used only if dates aren't yyyy-mm-dd (e.g. 23/09/2024 → DMY, 09/23/2024 → MDY)
+const WORD_COLUMN = "Word of the day";
+const IGNORE_COLUMNS = ["Date", WORD_COLUMN, "Winner", "Loser"];
+const MW_API_KEY = "ddb9f395-7f48-4228-99b6-389cd274b079";   // Merriam-Webster Collegiate key
+const FAIL_SCORE = 8;               // score used for a failed game, shown as "X"
+const BUMP_MONTHS = 3;               // completed months shown in "Monthly Change"
+const COLORS = {
+  Alexander: "#E8825A", Diana: "#B39DDB", Elisa: "#7FB2F0", Gaia: "#F06EE0", Jason: "#2E86D4",
+  Luca: "#3D6FF5", Luyao: "#2A1A9E", Maria: "#F04452", Ray: "#7ACB7E", Siri: "#EADB8E", Stefan: "#1F6B50",
+};
+const FALLBACK = ["#8D6E63", "#26A69A", "#FFA726", "#AB47BC", "#78909C", "#D4E157"];
+
+// ---------- Helpers ----------
+const $ = id => document.getElementById(id);
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
+const fmt = v => v.toFixed(2);
+const monthKey = d => d.getFullYear() * 12 + d.getMonth();
+const keyLabel = (k, short) => (short ? MONTHS[k % 12].slice(0, 3) + " " : MONTHS[k % 12] + " ") + Math.floor(k / 12);
+let fallbackIdx = 0;
+const color = p => COLORS[p] || (COLORS[p] = FALLBACK[fallbackIdx++ % FALLBACK.length]);
+
+function parseCSV(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(cell); cell = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+// Detects day/month order from the data: a first part above 12 means DMY, a second part above 12 means MDY
+const nums = s => (s.match(/\d+/g) || []).map(Number);
+function detectDateOrder(values) {
+  const parts = values.map(nums).filter(p => p.length >= 3 && p[0] < 1000);
+  if (parts.some(p => p[0] > 12)) return "DMY";
+  if (parts.some(p => p[1] > 12)) return "MDY";
+  return DATE_ORDER;
+}
+
+// Handles 23-09-2024, 23.9.2024, 23/09/2024, 2024-09-23, "23. sep. 2024", "mandag 23. september 2024" and Excel serial numbers
+function parseDate(s, order) {
+  const text = s.trim().toLowerCase();
+  const p = nums(text);
+  if (p.length === 1 && p[0] > 20000) return new Date(1899, 11, 30 + p[0]);             // Excel/Sheets serial
+  const name = text.match(/(jan|feb|mar|apr|maj|may|jun|jul|aug|sep|okt|oct|nov|dec)[a-z]*/);
+  if (name && p.length >= 2) {
+    const m = ["jan","feb","mar","apr",["maj","may"],"jun","jul","aug","sep",["okt","oct"],"nov","dec"]
+      .findIndex(x => [].concat(x).includes(name[1]));
+    const year = p.find(n => n >= 1000), day = p.find(n => n < 1000);
+    return new Date(year, m, day);
+  }
+  if (p.length < 3) return null;
+  if (p[0] >= 1000) return new Date(p[0], p[1] - 1, p[2]);
+  const [d, m] = order === "MDY" ? [p[1], p[0]] : [p[0], p[1]];
+  return new Date(p[2] < 100 ? 2000 + p[2] : p[2], m - 1, d);
+}
+
+
+// Turn the wide sheet (one column per player) into games: {date, word, scores: {player: n}, winner, loser}
+function toGames(rows) {
+  const header = rows[0].map(h => h.trim());
+  const dateIdx = header.indexOf("Date"), wordIdx = header.indexOf(WORD_COLUMN);
+  const playerIdx = header.map((h, i) => i).filter(i => header[i] && !IGNORE_COLUMNS.includes(header[i]));
+  const order = detectDateOrder(rows.slice(1).map(r => r[dateIdx] || ""));
+  const games = [];
+  for (const r of rows.slice(1)) {
+    const date = r[dateIdx] && parseDate(r[dateIdx], order);
+    if (!date) continue;
+    const scores = {};
+    for (const i of playerIdx) { const v = parseFloat(r[i]); if (!isNaN(v)) scores[header[i]] = v; }
+    const vals = Object.values(scores);
+    const unique = target => { const w = Object.keys(scores).filter(p => scores[p] === target); return w.length === 1 ? w[0] : null; };
+    games.push({
+      date, word: (r[wordIdx] || "").trim(), scores,
+      winner: vals.length > 1 ? unique(Math.min(...vals)) : null,
+      loser:  vals.length > 1 ? unique(Math.max(...vals)) : null,
+    });
+  }
+  return { games, players: playerIdx.map(i => header[i]) };
+}
+
+function stats(games) {
+  const s = {};
+  for (const g of games) {
+    for (const [p, v] of Object.entries(g.scores)) (s[p] ||= { scores: [], w: 0, l: 0 }).scores.push(v);
+    if (g.winner) s[g.winner].w++;
+    if (g.loser) s[g.loser].l++;
+  }
+  return s;
+}
+
+// Merriam-Webster first (same as the Power BI query), free dictionary as fallback
+async function getDefinition(word) {
+  const sources = [
+    [`https://www.dictionaryapi.com/api/v3/references/collegiate/json/${word}?key=${MW_API_KEY}`,
+     j => typeof j?.[0] === "object" ? (j[0].shortdef || []).join("; ") : ""],
+    [`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`,
+     j => j?.[0]?.meanings?.[0]?.definitions?.[0]?.definition || ""],
+  ];
+  for (const [url, pick] of sources) {
+    try {
+      const r = await fetch(url);
+      const def = r.ok ? pick(await r.json()) : "";
+      if (def) return def;
+    } catch { /* try next source */ }
+  }
+  return "No definition found";
+}
+
+// ---------- Render ----------
+function renderHeader(games) {
+  const played = games.filter(g => Object.keys(g.scores).length);
+  const last = played[played.length - 1];
+  const gameNo = played.filter(g => g.date.getDay() % 6 !== 0).length;   // weekdays with at least one score
+  $("game").textContent = "Game " + gameNo;
+  $("date").textContent = last.date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  // Wordler of the previous month
+  const prev = monthKey(last.date) - 1;
+  const st = stats(games.filter(g => monthKey(g.date) === prev));
+  const best = Object.entries(st).map(([p, x]) => [p, avg(x.scores)]).sort((a, b) => a[1] - b[1])[0];
+  $("wotmMonth").textContent = MONTHS[prev % 12];
+  $("wotmUser").textContent = best ? best[0] : "–";
+  $("wotmAvg").textContent = best ? fmt(best[1]) : "–";
+
+  // Latest word + definition
+  const word = [...games].reverse().find(g => g.word)?.word || "";
+  $("word").textContent = word;
+  if (word) getDefinition(word.toLowerCase()).then(d => { $("def").textContent = d; });
+
+  // Most common letter in each position
+  const words = games.map(g => g.word.toLowerCase()).filter(w => /^[a-z]{5}$/.test(w));
+  $("tiles").innerHTML = [0, 1, 2, 3, 4].map(i => {
+    const c = {}; words.forEach(w => c[w[i]] = (c[w[i]] || 0) + 1);
+    const top = Object.entries(c).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    return `<div class="tile"><b>${top}</b><span>${i + 1}. position</span></div>`;
+  }).join("");
+}
+
+function setupFilters(games) {
+  const played = games.filter(g => Object.keys(g.scores).length);
+  const last = played[played.length - 1].date;
+  const years = [...new Set(played.map(g => g.date.getFullYear()))].sort();
+  $("year").innerHTML = years.map(y => `<option>${y}</option>`).join("");
+  $("year").value = last.getFullYear();
+  const fillMonths = keep => {
+    const y = +$("year").value;
+    const ms = [...new Set(played.filter(g => g.date.getFullYear() === y).map(g => g.date.getMonth()))].sort((a, b) => a - b);
+    $("month").innerHTML = `<option value="all">All</option>` + ms.map(m => `<option value="${m}">${MONTHS[m]}</option>`).join("");
+    $("month").value = keep != null && ms.includes(keep) ? keep : "all";
+  };
+  fillMonths(last.getMonth());
+  const update = () => renderLeaderboard(games);
+  $("year").onchange = () => { fillMonths(); update(); };
+  $("month").onchange = update;
+  update();
+}
+
+function renderLeaderboard(games) {
+  const y = +$("year").value, m = $("month").value;
+  const sel = games.filter(g => g.date.getFullYear() === y && (m === "all" || g.date.getMonth() === +m));
+  const st = stats(sel);
+  const rows = Object.entries(st).map(([p, x]) => ({ p, avg: avg(x.scores), n: x.scores.length, w: x.w, l: x.l }))
+                     .sort((a, b) => a.avg - b.avg);
+  const max = k => Math.max(...rows.map(r => r[k]), 1);
+  const minAvg = Math.min(...rows.map(r => r.avg)), maxAvg = Math.max(...rows.map(r => r.avg));
+  const blue = a => `background: rgba(59,130,246,${(0.12 + 0.88 * a).toFixed(2)})`;
+  const ratio = r => r.l ? (r.w / r.l).toFixed(1) : "–";
+  const ratioBg = r => !r.l ? "" : r.w / r.l >= 1 ? "background:#c6e6c3" : "background:#f0b8bd";
+  $("lbBody").innerHTML = rows.map(r => `<tr>
+    <td>${r.p}</td>
+    <td class="num" style="${blue(maxAvg > minAvg ? (r.avg - minAvg) / (maxAvg - minAvg) * 0.8 : 0)}">${fmt(r.avg)}</td>
+    <td class="num" style="${blue(r.n / max("n"))}">${r.n}</td>
+    <td class="num" style="${r.w ? blue(r.w / max("w")) : ""}">${r.w || ""}</td>
+    <td class="num" style="${r.l ? blue(r.l / max("l")) : ""}">${r.l || ""}</td>
+    <td class="num" style="${ratioBg(r)}">${ratio(r)}</td></tr>`).join("");
+  const all = Object.values(st).flatMap(x => x.scores);
+  const W = rows.reduce((s, r) => s + r.w, 0), L = rows.reduce((s, r) => s + r.l, 0);
+  $("lbFoot").innerHTML = `<tr><td>Total</td><td class="num">${all.length ? fmt(avg(all)) : ""}</td>
+    <td class="num">${all.length}</td><td class="num">${W}</td><td class="num">${L}</td>
+    <td class="num">${L ? (W / L).toFixed(1) : "–"}</td></tr>`;
+}
+
+function renderBump(games) {
+  const played = games.filter(g => Object.keys(g.scores).length);
+  const lastKey = monthKey(played[played.length - 1].date);
+  const keys = Array.from({ length: BUMP_MONTHS }, (_, i) => lastKey - BUMP_MONTHS + i);
+  const cols = keys.map(k => {
+    const st = stats(games.filter(g => monthKey(g.date) === k));
+    return Object.entries(st).map(([p, x]) => ({ p, v: avg(x.scores) })).sort((a, b) => a.v - b.v);
+  });
+  const rowsN = Math.max(...cols.map(c => c.length), 1);
+  const W = 420, rowH = 46, colW = 56, top = 10, legendX = 300;
+  const gap = (legendX - 20 - colW * keys.length) / (keys.length - 1 || 1);
+  const x = i => i * (colW + gap);
+  const H = top + rowsN * rowH + 30;
+  let ribbons = "", rects = "";
+  cols.forEach((col, i) => col.forEach((d, r) => {
+    const y = top + r * rowH;
+    rects += `<rect x="${x(i)}" y="${y}" width="${colW}" height="${rowH}" fill="${color(d.p)}"><title>${d.p}: ${fmt(d.v)}</title></rect>
+      <text x="${x(i) + colW / 2}" y="${y + rowH / 2 + 4}" text-anchor="middle" font-size="12" fill="#fff">${fmt(d.v)}</text>`;
+    if (i < cols.length - 1) {
+      const r2 = cols[i + 1].findIndex(e => e.p === d.p);
+      if (r2 < 0) return;
+      const x1 = x(i) + colW, x2 = x(i + 1), y1 = y, y2 = top + r2 * rowH, mx = (x1 + x2) / 2;
+      ribbons += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2} L${x2},${y2 + rowH} C${mx},${y2 + rowH} ${mx},${y1 + rowH} ${x1},${y1 + rowH} Z"
+        fill="${color(d.p)}" opacity="0.55"><title>${d.p}</title></path>`;
+    }
+  }));
+  const labels = keys.map((k, i) => `<text x="${x(i) + colW / 2}" y="${H - 6}" text-anchor="middle" font-size="14" fill="#444">${MONTHS[k % 12]}</text>`).join("");
+  const players = [...new Set(cols.flat().map(d => d.p))].sort();
+  const legend = players.map((p, i) => `<circle cx="${legendX}" cy="${top + 130 + i * 24}" r="4" fill="${color(p)}"/>
+    <text x="${legendX + 12}" y="${top + 135 + i * 24}" font-size="13" fill="#444">${p}</text>`).join("");
+  $("bump").innerHTML = `<svg viewBox="0 0 ${W} ${H}">${ribbons}${rects}${labels}${legend}</svg>`;
+}
+
+function renderCharts(games, players) {
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = "#555";
+  const played = games.filter(g => Object.keys(g.scores).length);
+  const first = monthKey(played[0].date), last = monthKey(played[played.length - 1].date);
+  const keys = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+  const byMonth = {};
+  for (const g of played) for (const [p, v] of Object.entries(g.scores)) ((byMonth[p] ||= {})[monthKey(g.date)] ||= []).push(v);
+  const active = players.filter(p => byMonth[p]).sort();
+
+  new Chart($("trend"), {
+    type: "line",
+    data: { labels: keys.map(k => keyLabel(k, true)),
+      datasets: active.map(p => ({ label: p, borderColor: color(p), backgroundColor: color(p), borderWidth: 2,
+        tension: 0.4, pointRadius: 0, pointHoverRadius: 4, spanGaps: true,
+        data: keys.map(k => byMonth[p][k] ? +avg(byMonth[p][k]).toFixed(2) : null) })) },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "top", align: "start", labels: { boxWidth: 6, boxHeight: 6, usePointStyle: true } },
+                 tooltip: { itemSort: (a, b) => a.parsed.y - b.parsed.y } },
+      scales: { y: { reverse: true, grid: { color: "#e3e3e3" } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } } } },
+  });
+
+  const all = stats(games);
+  const guesses = [1, 2, 3, 4, 5, 6];
+  new Chart($("dist"), {
+    type: "bar",
+    data: { labels: guesses,
+      datasets: active.map(p => ({ label: p, backgroundColor: color(p),
+        data: guesses.map(g => all[p].scores.filter(v => v === g).length) })) },
+    options: { maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { title: { display: true, text: "# of guesses" }, grid: { display: false } },
+                y: { grid: { color: "#e3e3e3" } } } },
+  });
+}
+
+// ---------- Load ----------
+fetch(CSV_URL || "data.csv", { cache: "no-store" })
+  .then(r => r.text())
+  .then(text => {
+    const { games, players } = toGames(parseCSV(text));
+    games.sort((a, b) => a.date - b.date);
+    renderHeader(games);
+    setupFilters(games);
+    renderBump(games);
+    renderCharts(games, players);
+  })
+  .catch(err => { document.body.insertAdjacentHTML("afterbegin", `<p style="padding:12px;color:#b00">Could not load data: ${err}</p>`); });
+</script>
+</body>
+</html>
